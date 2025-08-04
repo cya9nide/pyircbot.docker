@@ -175,19 +175,6 @@ docker compose build --no-cache
 docker compose up -d
 ```
 
-### DNS Issues
-If you encounter DNS resolution issues during build:
-```bash
-# Configure Docker DNS
-sudo tee /etc/docker/daemon.json <<EOF
-{
-  "dns": ["9.9.9.9", "1.1.1.1"],
-  "dns-opts": ["use-vc"]
-}
-EOF
-sudo systemctl restart docker
-```
-
 ## 🛠️ Development
 
 ### Local Development
