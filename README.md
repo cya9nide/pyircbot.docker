@@ -1,6 +1,7 @@
 # PyIRCBot - Dockerized IRC Bot
 
 A lightweight, containerized IRC bot built with Python and Docker. Features monthly statistics tracking, weather integration, and persistent log storage.
+Tested only with Gamesurge.
 
 ## 🚀 Quick Start
 
