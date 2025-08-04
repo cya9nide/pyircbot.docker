@@ -1,0 +1,19 @@
+services:
+  pyircbot:
+    build: .
+    container_name: pyircbot
+    restart: unless-stopped
+    volumes:
+      # Mount the data directory for persistent logs
+      - ./data:/app/data
+      # Mount .env file for configuration
+      - ./.env:/app/.env:ro
+    environment:
+      # Set log directory to the mounted data volume
+      - LOG_DIR=/app/data
+    networks:
+      - pyircbot-network
+
+networks:
+  pyircbot-network:
+    driver: bridge 

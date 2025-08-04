@@ -1,0 +1,34 @@
+# PyIRCBot IRC Bot - Git Ignore File
+
+# Log files
+pyircbot.log
+pyircbot_*.log
+pyircbot_*_archive.log
+
+# Runtime data directory (contains persistent logs)
+data/
+
+# Environment files
+.env
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db 

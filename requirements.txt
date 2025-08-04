@@ -1,0 +1,8 @@
+# PyIRCBot IRC Bot Requirements
+
+# Core dependencies
+requests>=2.25.1  # For web scraping and API calls
+python-dotenv>=0.19.0  # For environment variables
+
+# Optional dependencies for enhanced features:
+# beautifulsoup4>=4.9.3  # For advanced web scraping 
