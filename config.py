@@ -25,6 +25,13 @@ COMMAND_PREFIX = os.getenv('COMMAND_PREFIX', '!')  # Commands start with this ch
 MAX_DICE_COUNT = int(os.getenv('MAX_DICE_COUNT', '10'))   # Maximum number of dice to roll
 MAX_DICE_SIDES = int(os.getenv('MAX_DICE_SIDES', '100'))  # Maximum sides on dice
 
+# Services Authentication (optional)
+# Full /msg command to send after connecting, e.g.:
+#   /msg authserv@services.gamesurge.net auth Nick:Pass
+#   /msg NickServ IDENTIFY password
+AUTH_COMMAND = os.getenv('AUTH_COMMAND', '')
+AUTH_DELAY = int(os.getenv('AUTH_DELAY', '2'))  # seconds to wait after auth before joining
+
 # Auto-reconnect settings
 AUTO_RECONNECT = os.getenv('AUTO_RECONNECT', 'True').lower() == 'true'
 RECONNECT_DELAY = int(os.getenv('RECONNECT_DELAY', '30'))  # seconds

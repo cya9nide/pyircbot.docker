@@ -30,6 +30,7 @@ class PyIRCBot:
         self.port = port or config.IRC_PORT
         self.channel = channel or config.IRC_CHANNEL
         self.nickname = nickname or config.BOT_NICKNAME
+        self.desired_nickname = self.nickname  # Track the nick we actually want
         self.username = username or config.BOT_USERNAME
         self.realname = realname or config.BOT_REALNAME
         self.socket = None
@@ -37,6 +38,10 @@ class PyIRCBot:
         
         # Load API keys
         self.weather_api_key = os.getenv('WEATHER_API_KEY')
+
+        # Services auth
+        self.auth_command = config.AUTH_COMMAND
+        self.auth_delay = config.AUTH_DELAY
         
         # Get current month for tracking
         self.current_month = datetime.now().strftime('%m-%Y')
@@ -241,7 +246,25 @@ class PyIRCBot:
                 if command == 'PING':
                     self.send_raw(f"PONG :{message}")
                     return
-                
+
+                # Handle NICK change — someone freed our desired nick
+                if command == 'NICK' and self.nickname != self.desired_nickname:
+                    self._try_reclaim_nick()
+                    return
+
+                # Handle QUIT — someone using our desired nick left
+                if command == 'QUIT' and sender == self.desired_nickname:
+                    self._try_reclaim_nick()
+                    return
+
+                # Handle successful nick change (server confirms our NICK)
+                if command == 'NICK' and sender == self.nickname:
+                    new_nick = message.lstrip(':')
+                    if new_nick == self.desired_nickname:
+                        self.nickname = self.desired_nickname
+                        self.logger.info(f"Reclaimed desired nick '{self.desired_nickname}'")
+                    return
+
                 # Handle PRIVMSG
                 if command == 'PRIVMSG':
                     # The target is the second part after splitting the message
@@ -257,6 +280,27 @@ class PyIRCBot:
             if line.startswith('PING'):
                 pong_msg = line.replace('PING', 'PONG')
                 self.send_raw(pong_msg)
+
+    def _authenticate_and_join(self):
+        """Send auth command (if configured), wait for vhost to apply, then join channel."""
+        if self.auth_command:
+            raw = self.auth_command.strip()
+            # Convert /msg <target> <text>  →  PRIVMSG <target> :<text>
+            if raw.lower().startswith('/msg '):
+                raw = raw[5:]  # strip '/msg '
+                parts = raw.split(' ', 1)
+                target = parts[0]
+                text = parts[1] if len(parts) > 1 else ''
+                raw = f"PRIVMSG {target} :{text}"
+            self.send_raw(raw)
+            self.logger.info(f"Sent auth command to services. Waiting {self.auth_delay}s before joining.")
+            time.sleep(self.auth_delay)
+        self.join_channel(self.channel)
+
+    def _try_reclaim_nick(self):
+        """Attempt to reclaim the desired nickname if we're using a fallback."""
+        if self.nickname != self.desired_nickname:
+            self.send_raw(f"NICK {self.desired_nickname}")
 
     def handle_channel_message(self, sender, message):
         """Handle messages in the channel"""
@@ -832,12 +876,17 @@ class PyIRCBot:
                         self.handle_message(line)
                         
                         # Handle server responses
-                        if "001" in line:  # Welcome message
-                            self.join_channel(self.channel)
-                        elif "433" in line:  # Nickname in use
-                            self.nickname += str(random.randint(1, 999))
-                            self.send_raw(f"NICK {self.nickname}")
-                        elif "PING" in line:
+                        parts = line.split()
+                        numeric = parts[1] if len(parts) > 1 else ''
+                        if numeric == "001":  # Welcome message
+                            self._authenticate_and_join()
+                        elif numeric == "433":  # Nickname in use
+                            # Only change if we haven't already fallen back
+                            if self.nickname == self.desired_nickname:
+                                self.nickname = self.desired_nickname + "_"
+                                self.send_raw(f"NICK {self.nickname}")
+                                self.logger.warning(f"Nick '{self.desired_nickname}' in use, using '{self.nickname}'")
+                        elif "PING" in line and not line.startswith(':'):
                             pong_msg = line.replace("PING", "PONG")
                             self.send_raw(pong_msg)
                             
