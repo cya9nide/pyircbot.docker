@@ -12,12 +12,19 @@ import random
 import logging
 import urllib.parse
 import urllib.request
+
+
 import requests
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import config
 import calendar
+
+try:
+    from ddgs import DDGS
+except ImportError:
+    DDGS = None
 
 class PyIRCBot:
     def __init__(self, server=None, port=None, channel=None, 
@@ -39,6 +46,21 @@ class PyIRCBot:
         # Load API keys
         self.weather_api_key = os.getenv('WEATHER_API_KEY')
 
+        # LM Studio settings (OpenAI-compatible local endpoint)
+        self.lmstudio_base_url = os.getenv('LMSTUDIO_BASE_URL', 'http://host.docker.internal:1234/v1').rstrip('/')
+        self.lmstudio_model = os.getenv('LMSTUDIO_MODEL', '')
+        self.lmstudio_api_key = os.getenv('LMSTUDIO_API_KEY', '')
+        self.lmstudio_timeout = int(os.getenv('LMSTUDIO_TIMEOUT_SECONDS', '30'))
+        self.qa_max_per_window = int(os.getenv('QA_RATE_LIMIT_COUNT', '3'))
+        self.qa_window_minutes = int(os.getenv('QA_RATE_LIMIT_WINDOW_MINUTES', '30'))
+
+        # IRC payload safety margin. IRC max line is 512 bytes including command/meta,
+        # so keep message chunks conservative to avoid server-side truncation.
+        self.irc_message_chunk_size = int(os.getenv('IRC_MESSAGE_CHUNK_SIZE', '380'))
+
+        # Per-user .qa rate tracking: {nickname: [datetime, ...]}
+        self.qa_query_history = {}
+
         # Services auth
         self.auth_command = config.AUTH_COMMAND
         self.auth_delay = config.AUTH_DELAY
@@ -59,7 +81,9 @@ class PyIRCBot:
             '.weather': self.cmd_weather,
             '.joke': self.cmd_joke,
             '.stats': self.cmd_stats,
-            '.topusers': self.cmd_topusers
+            '.topusers': self.cmd_topusers,
+            '.qa': self.cmd_qa,
+            '.google': self.cmd_google
         }
         
         # Bot statistics with monthly tracking
@@ -216,7 +240,29 @@ class PyIRCBot:
 
     def send_message(self, target, message):
         """Send message to channel or user"""
-        self.send_raw(f"PRIVMSG {target} :{message}")
+        for chunk in self._split_irc_message(message):
+            self.send_raw(f"PRIVMSG {target} :{chunk}")
+
+    def _split_irc_message(self, message):
+        """Split outgoing text into IRC-safe chunks."""
+        if not message:
+            return [""]
+
+        text = " ".join(str(message).split())
+        max_len = max(64, self.irc_message_chunk_size)
+
+        chunks = []
+        while len(text) > max_len:
+            split_at = text.rfind(' ', 0, max_len + 1)
+            if split_at <= 0:
+                split_at = max_len
+            chunks.append(text[:split_at].rstrip())
+            text = text[split_at:].lstrip()
+
+        if text:
+            chunks.append(text)
+
+        return chunks
 
     def join_channel(self, channel):
         """Join IRC channel"""
@@ -356,7 +402,7 @@ class PyIRCBot:
     # Bot command handlers
     def cmd_help(self, sender, message):
         """Show available commands"""
-        help_text = "Available commands: .help, .time, .ping, .dice, .8ball, .weather, .joke, .stats, .google"
+        help_text = "Available commands: .help, .time, .ping, .dice, .8ball, .weather, .joke, .stats, .topusers, .qa, .google"
         return help_text
 
     def cmd_time(self, sender, message):
@@ -697,13 +743,66 @@ class PyIRCBot:
         return f"{self.nickname} Stats - Uptime: {uptime_str}, Messages: {self.stats['messages_received']}, Commands: {self.stats['commands_processed']} | {self.current_month}: Messages: {monthly_stats['messages_received']}, Commands: {monthly_stats['commands_processed']}, Loudmouth: {monthly_loudmouth} ({monthly_loudmouth_count} messages)"
 
     def cmd_google(self, sender, message):
-        """Google search command with top 3 results using DuckDuckGo API"""
+        """Search command with DuckDuckGo fallback chain and Google URL fallback."""
         try:
             query = message.replace('.google', '').strip()
             if not query:
                 return "Usage: .google <search term>"
-            
-            # Use DuckDuckGo Instant Answer API (no API key required)
+
+            # 1) Primary: ddgs text search (no API key)
+            results = self._search_ddgs(query, max_results=3)
+            if results:
+                return f"🔍 Search results for '{query}': {' | '.join(results)}"
+
+            # 2) Secondary: DuckDuckGo Instant Answer API
+            results = self._search_instant_answer(query, max_results=3)
+            if results:
+                return f"🔍 Search results for '{query}': {' | '.join(results)}"
+
+            # 3) Final fallback: direct search URL
+            encoded_query = urllib.parse.quote(query)
+            return f"🔍 Search for '{query}': https://www.google.com/search?q={encoded_query}"
+        except Exception as e:
+            self.logger.error(f"Search error: {e}")
+            return "Sorry, search failed."
+
+    def _search_ddgs(self, query, max_results=3):
+        """Primary search path: ddgs package-backed DuckDuckGo text search."""
+        if DDGS is None:
+            self.logger.warning("ddgs package not available; skipping ddgs search")
+            return []
+
+        try:
+            results = []
+            with DDGS() as ddgs:
+                for idx, item in enumerate(ddgs.text(query, max_results=max_results), start=1):
+                    if idx > max_results:
+                        break
+
+                    title = (item.get('title') or 'Untitled').strip()
+                    snippet = (item.get('body') or item.get('snippet') or '').strip()
+                    link = (item.get('href') or item.get('url') or '').strip()
+
+                    if len(title) > 80:
+                        title = title[:77] + "..."
+                    if len(snippet) > 100:
+                        snippet = snippet[:97] + "..."
+
+                    if link and snippet:
+                        results.append(f"{len(results)+1}. {title} - {snippet} - {link}")
+                    elif link:
+                        results.append(f"{len(results)+1}. {title} - {link}")
+                    else:
+                        results.append(f"{len(results)+1}. {title}")
+
+            return results[:max_results]
+        except Exception as e:
+            self.logger.error(f"ddgs search error: {e}")
+            return []
+
+    def _search_instant_answer(self, query, max_results=3):
+        """Secondary search path: DuckDuckGo Instant Answer API."""
+        try:
             ddg_url = "https://api.duckduckgo.com/"
             params = {
                 'q': query,
@@ -711,42 +810,58 @@ class PyIRCBot:
                 'no_html': '1',
                 'skip_disambig': '1'
             }
-            
+
             response = requests.get(ddg_url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
-            
+
             results = []
-            
-            # Add instant answer if available
+
             if data.get('AbstractText'):
                 abstract = data['AbstractText'][:100] + "..." if len(data['AbstractText']) > 100 else data['AbstractText']
                 results.append(f"1. {abstract} - {data.get('AbstractURL', 'No URL')}")
-            
-            # Add related topics
-            for i, topic in enumerate(data.get('RelatedTopics', [])[:3-len(results)]):
-                if isinstance(topic, dict) and topic.get('Text'):
-                    text = topic['Text'][:80] + "..." if len(topic['Text']) > 80 else topic['Text']
-                    results.append(f"{len(results)+1}. {text}")
-            
-            # If we don't have enough results, add some generic suggestions
-            while len(results) < 3:
-                results.append(f"{len(results)+1}. Search for '{query}' on Google")
-            
-            if results:
-                return f"🔍 Search results for '{query}': {' | '.join(results)}"
-            else:
-                # Fallback to Google search URL
-                encoded_query = urllib.parse.quote(query)
-                return f"🔍 Search for '{query}': https://www.google.com/search?q={encoded_query}"
-                
+
+            for item in data.get('Results', []):
+                if len(results) >= max_results:
+                    break
+                if isinstance(item, dict):
+                    text = (item.get('Text') or '').strip()
+                    first_url = (item.get('FirstURL') or '').strip()
+                    if text:
+                        short_text = text[:80] + "..." if len(text) > 80 else text
+                        if first_url:
+                            results.append(f"{len(results)+1}. {short_text} - {first_url}")
+                        else:
+                            results.append(f"{len(results)+1}. {short_text}")
+
+            for topic in self._extract_topic_entries(data.get('RelatedTopics', [])):
+                if len(results) >= max_results:
+                    break
+                text = topic.get('Text', '')
+                first_url = topic.get('FirstURL', '')
+                short_text = text[:80] + "..." if len(text) > 80 else text
+                if first_url:
+                    results.append(f"{len(results)+1}. {short_text} - {first_url}")
+                else:
+                    results.append(f"{len(results)+1}. {short_text}")
+
+            return results[:max_results]
         except requests.exceptions.RequestException as e:
-            self.logger.error(f"Search API error: {e}")
-            encoded_query = urllib.parse.quote(query)
-            return f"🔍 Search for '{query}': https://www.google.com/search?q={encoded_query}"
-        except Exception as e:
-            self.logger.error(f"Search error: {e}")
-            return "Sorry, search failed."
+            self.logger.error(f"Instant Answer API error: {e}")
+            return []
+
+    def _extract_topic_entries(self, related_topics):
+        """Flatten both flat and grouped RelatedTopics entries."""
+        entries = []
+        for topic in related_topics:
+            if not isinstance(topic, dict):
+                continue
+            if topic.get('Text'):
+                entries.append(topic)
+            for nested in topic.get('Topics', []):
+                if isinstance(nested, dict) and nested.get('Text'):
+                    entries.append(nested)
+        return entries
 
     def cmd_topusers(self, sender, message):
         """Handle the .topusers command to show top 3 users by message count for current month"""
@@ -760,6 +875,143 @@ class PyIRCBot:
         else:
             response = f"No user data available for {self.current_month}."
         return response
+
+    def _check_qa_rate_limit(self, sender):
+        """Allow only N .qa requests per user in a rolling time window."""
+        now = datetime.now()
+        window_start = now - timedelta(minutes=self.qa_window_minutes)
+        history = self.qa_query_history.get(sender, [])
+
+        # Drop entries outside the rolling window
+        history = [ts for ts in history if ts >= window_start]
+
+        if len(history) >= self.qa_max_per_window:
+            oldest = min(history)
+            retry_after = oldest + timedelta(minutes=self.qa_window_minutes)
+            remaining = max(1, int((retry_after - now).total_seconds() // 60) + 1)
+            self.qa_query_history[sender] = history
+            return False, remaining
+
+        history.append(now)
+        self.qa_query_history[sender] = history
+        return True, None
+
+    def _ask_lmstudio(self, prompt):
+        """Send a prompt to LM Studio's OpenAI-compatible chat completions API."""
+        if not self.lmstudio_model:
+            return None, "LM Studio model is not configured. Set LMSTUDIO_MODEL in .env."
+
+        # Accept either a base URL (e.g., http://host:1234/v1) or a full
+        # completions endpoint (e.g., http://host:1234/v1/chat/completions).
+        lower_base = self.lmstudio_base_url.lower()
+        if lower_base.endswith('/chat/completions'):
+            endpoint = self.lmstudio_base_url
+        elif lower_base.endswith('/v1'):
+            endpoint = f"{self.lmstudio_base_url}/chat/completions"
+        else:
+            endpoint = f"{self.lmstudio_base_url}/v1/chat/completions"
+        headers = {'Content-Type': 'application/json'}
+        if self.lmstudio_api_key:
+            headers['Authorization'] = f"Bearer {self.lmstudio_api_key}"
+
+        payload = {
+            'model': self.lmstudio_model,
+            'messages': [
+                {
+                    'role': 'system',
+                    'content': 'You are a concise IRC assistant. Keep responses short and plain text.'
+                },
+                {
+                    'role': 'user',
+                    'content': prompt
+                }
+            ],
+            'temperature': 0.7,
+            'max_tokens': 220
+        }
+
+        try:
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=self.lmstudio_timeout)
+            response.raise_for_status()
+            data = response.json()
+
+            # Surface explicit API-side error payloads when present.
+            if isinstance(data, dict) and 'error' in data:
+                err = data.get('error')
+                if isinstance(err, dict):
+                    err_msg = err.get('message') or err.get('code') or str(err)
+                else:
+                    err_msg = str(err)
+                return None, f"LM Studio error: {err_msg}"
+
+            content = None
+
+            # OpenAI/LM Studio chat-completions style.
+            choices = data.get('choices') if isinstance(data, dict) else None
+            if isinstance(choices, list) and choices:
+                first = choices[0] if isinstance(choices[0], dict) else {}
+                message = first.get('message') if isinstance(first, dict) else None
+                if isinstance(message, dict):
+                    msg_content = message.get('content')
+                    if isinstance(msg_content, str):
+                        content = msg_content.strip()
+                    elif isinstance(msg_content, list):
+                        parts = []
+                        for item in msg_content:
+                            if isinstance(item, dict) and isinstance(item.get('text'), str):
+                                parts.append(item['text'])
+                        content = " ".join(parts).strip() if parts else None
+
+                # Some compatible APIs return text directly in choice.
+                if not content and isinstance(first.get('text'), str):
+                    content = first['text'].strip()
+
+            # Fallback for nonstandard but simple payloads.
+            if not content and isinstance(data, dict) and isinstance(data.get('response'), str):
+                content = data['response'].strip()
+
+            if not content:
+                keys = list(data.keys()) if isinstance(data, dict) else []
+                self.logger.error(f"LM Studio response parse failed: missing text content; keys={keys}")
+                return None, "LM Studio returned an empty response."
+            return content, None
+        except requests.exceptions.RequestException as e:
+            err_msg = None
+            if getattr(e, 'response', None) is not None:
+                try:
+                    err_data = e.response.json()
+                    if isinstance(err_data, dict):
+                        err = err_data.get('error', err_data)
+                        if isinstance(err, dict):
+                            err_msg = err.get('message') or err.get('code')
+                        elif isinstance(err, str):
+                            err_msg = err
+                except Exception:
+                    err_msg = (e.response.text or '')[:180]
+
+            self.logger.error(f"LM Studio request failed: {e}")
+            if err_msg:
+                return None, f"LM Studio request failed: {err_msg}"
+            return None, "LM Studio request failed. Ensure LM Studio server is running and reachable."
+        except (KeyError, IndexError, TypeError) as e:
+            self.logger.error(f"LM Studio response parse failed: {e}")
+            return None, "LM Studio response format was unexpected."
+
+    def cmd_qa(self, sender, message):
+        """Ask a question via LM Studio using .qa <question>."""
+        question = message.replace('.qa', '', 1).strip()
+        if not question:
+            return "Usage: .qa <question>"
+
+        allowed, minutes_remaining = self._check_qa_rate_limit(sender)
+        if not allowed:
+            return f"{sender}: rate limit reached for .qa (max {self.qa_max_per_window} per {self.qa_window_minutes} minutes). Try again in about {minutes_remaining} minute(s)."
+
+        answer, error = self._ask_lmstudio(question)
+        if error:
+            return f"{sender}: {error}"
+
+        return f"{sender}: {answer}"
 
     def extract_links(self, message):
         """Extract URLs from message"""

@@ -115,6 +115,20 @@ pyircbot.docker/
 - **Auto-restart**: Container automatically restarts on failure
 - **Monthly rotation**: Logs are automatically rotated monthly
 - **Environment-based**: Configuration via environment variables
+- **Search fallback chain**: `.google` tries DDGS first, then DuckDuckGo Instant Answer, then returns a direct search URL
+
+## 🔐 Security Checklist
+
+- Keep secrets only in local `.env` files, never in source files.
+- Ensure `.env` and `.env.*` files remain gitignored.
+- Keep `env.example` sanitized with placeholders only.
+- Rotate any key/password immediately if it is pasted into chat, logs, or screenshots.
+- Avoid printing secrets in logs (especially auth commands and API keys).
+- Use least-privilege API keys where supported.
+- Prefer short-lived credentials and rotate them regularly.
+- Before pushing, run `git status` and verify no local config files are staged.
+- Before pushing, scan staged changes for secrets (for example with `rg`).
+- If a secret is committed, revoke/rotate first, then remove from git history as needed.
 
 ## Troubleshooting
 

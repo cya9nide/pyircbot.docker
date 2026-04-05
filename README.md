@@ -33,7 +33,9 @@ Tested only with Gamesurge.
 - **📊 Loudmouth Detection**: Identifies the user with the most messages in the current month
 - **👥 Top Users**: Shows the top 3 most active users for the current month
 - **🌤️ Weather Integration**: Get current weather information for any location
-- **🔍 Search Integration**: Google search functionality using DuckDuckGo API
+- **🤖 LM Studio Q&A**: Ask `.qa` questions via a local LM Studio server
+- **⏱️ Q&A Rate Limiting**: Limits `.qa` to 3 requests per user per 30 minutes
+- **🔍 Search Fallback Chain**: `.google` tries DDGS first, then DuckDuckGo Instant Answer, then a direct search URL
 - **📝 Persistent Logging**: Automatic monthly log archiving with American date format
 - **🐳 Docker Containerized**: Lightweight Alpine Linux container with auto-restart
 - **💾 Persistent Data**: Logs and data survive container restarts and system reboots
@@ -51,7 +53,8 @@ Tested only with Gamesurge.
 | `.joke` | Tells a random joke |
 | `.stats` | Shows bot statistics and monthly loudmouth |
 | `.topusers` | Lists top 3 users for current month |
-| `.google [query]` | Google search with top 3 results |
+| `.qa [question]` | Ask LM Studio a question (rate-limited) |
+| `.google [query]` | Top 3 search results via DDGS with fallback chain |
 
 ## 🐳 Docker Management
 
@@ -105,6 +108,17 @@ BOT_REALNAME=your_bot_realname_here
 
 # Optional: Weather API Key
 # WEATHER_API_KEY=your_weatherapi.com_api_key_here
+
+# Optional: LM Studio API for .qa command
+LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1
+LMSTUDIO_MODEL=your_loaded_lmstudio_model_id
+# LMSTUDIO_API_KEY=
+# LMSTUDIO_TIMEOUT_SECONDS=30
+
+# Optional: .qa rate limiting and IRC chunk size
+# QA_RATE_LIMIT_COUNT=3
+# QA_RATE_LIMIT_WINDOW_MINUTES=30
+# IRC_MESSAGE_CHUNK_SIZE=380
 ```
 
 ### Configuration Priority
@@ -113,6 +127,19 @@ The bot uses values in this priority order:
 1. **Runtime parameters** (passed to constructor)
 2. **Environment variables** (from `.env` file)
 3. **Default values** (in `config.py`)
+
+## 🔐 Security Checklist
+
+- Keep secrets only in local `.env` files, never in source files.
+- Ensure `.env` and `.env.*` files remain gitignored.
+- Keep `env.example` sanitized with placeholders only.
+- Rotate any key/password immediately if it is pasted into chat, logs, or screenshots.
+- Avoid printing secrets in logs (especially auth commands and API keys).
+- Use least-privilege API keys where supported.
+- Prefer short-lived credentials and rotate them regularly.
+- Before pushing, run `git status` and verify no local config files are staged.
+- Before pushing, scan staged changes for secrets (for example with `rg`).
+- If a secret is committed, revoke/rotate first, then remove from git history as needed.
 
 ## 📁 File Structure
 
@@ -186,6 +213,12 @@ pip install -r requirements.txt
 # Run locally
 python pyircbot.py
 ```
+
+### Search Behavior
+- `.google` now uses a fallback chain for better reliability without API keys.
+- Step 1: DDGS text search (top 3 web results).
+- Step 2: DuckDuckGo Instant Answer API if DDGS has no results.
+- Step 3: Returns a direct Google search URL as final fallback.
 
 ### Building the Image
 ```bash
