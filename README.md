@@ -110,7 +110,7 @@ BOT_REALNAME=your_bot_realname_here
 # WEATHER_API_KEY=your_weatherapi.com_api_key_here
 
 # Optional: LM Studio API for .qa command
-LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1
+LMSTUDIO_BASE_URL=http://your_lmstudio_host_ip:1234/v1/chat/completions
 LMSTUDIO_MODEL=your_loaded_lmstudio_model_id
 # LMSTUDIO_API_KEY=
 # LMSTUDIO_TIMEOUT_SECONDS=30
