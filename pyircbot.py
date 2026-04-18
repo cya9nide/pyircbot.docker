@@ -927,7 +927,7 @@ class PyIRCBot:
                 }
             ],
             'temperature': 0.7,
-            'max_tokens': 220
+            'max_tokens': int(os.getenv('LMSTUDIO_MAX_TOKENS', '1024'))
         }
 
         try:
@@ -962,6 +962,14 @@ class PyIRCBot:
                                 parts.append(item['text'])
                         content = " ".join(parts).strip() if parts else None
 
+                    # Qwen3 / reasoning models put the answer in reasoning_content
+                    # when content is empty. Extract the last paragraph as the conclusion.
+                    if not content and isinstance(message, dict):
+                        rc = message.get('reasoning_content') or message.get('thinking')
+                        if isinstance(rc, str) and rc.strip():
+                            paragraphs = [p.strip() for p in rc.split('\n\n') if p.strip()]
+                            content = paragraphs[-1] if paragraphs else rc.strip()
+
                 # Some compatible APIs return text directly in choice.
                 if not content and isinstance(first.get('text'), str):
                     content = first['text'].strip()
@@ -971,9 +979,24 @@ class PyIRCBot:
                 content = data['response'].strip()
 
             if not content:
-                keys = list(data.keys()) if isinstance(data, dict) else []
-                self.logger.error(f"LM Studio response parse failed: missing text content; keys={keys}")
+                self.logger.error(f"LM Studio response parse failed: missing text content; full_response={data!r}")
                 return None, "LM Studio returned an empty response."
+
+            # Strip hidden reasoning tags emitted by thinking models (DeepSeek-R1, QwQ, etc.)
+            # If the entire response is inside <think> tags (model produced no final answer),
+            # extract the last meaningful paragraph from the thinking block as a fallback.
+            think_match = re.search(r'<think>([\s\S]*?)</think>', content, flags=re.IGNORECASE)
+            stripped = re.sub(r'<think>[\s\S]*?</think>', '', content, flags=re.IGNORECASE).strip()
+            if not stripped and think_match:
+                # Pull last non-empty paragraph from thinking block as best-effort answer
+                paragraphs = [p.strip() for p in think_match.group(1).split('\n\n') if p.strip()]
+                stripped = paragraphs[-1] if paragraphs else ""
+            content = stripped
+
+            if not content:
+                self.logger.error(f"LM Studio response was only reasoning content; full_response={data!r}")
+                return None, "LM Studio returned an empty response."
+
             return content, None
         except requests.exceptions.RequestException as e:
             err_msg = None
