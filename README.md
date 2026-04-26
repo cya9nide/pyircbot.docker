@@ -35,6 +35,8 @@ Tested only with Gamesurge.
 - **🌤️ Weather Integration**: Get current weather information for any location
 - **🤖 LM Studio Q&A**: Ask `.qa` questions via a local LM Studio server
 - **⏱️ Q&A Rate Limiting**: Limits `.qa` to 3 requests per user per 30 minutes
+- **🧠 Q&A Follow-up Memory**: Remembers each user's recent `.qa` turns across restarts (SQLite) for contextual follow-up questions with strict caps
+- **🧹 Q&A Output Guardrails**: Filters leaked reasoning/meta text and caps answer length to prevent IRC flood
 - **🔍 Search Fallback Chain**: `.google` tries DDGS first, then DuckDuckGo Instant Answer, then a direct search URL
 - **📝 Persistent Logging**: Automatic monthly log archiving with American date format
 - **🐳 Docker Containerized**: Lightweight Alpine Linux container with auto-restart
@@ -115,9 +117,21 @@ LMSTUDIO_MODEL=your_loaded_lmstudio_model_id
 # LMSTUDIO_API_KEY=
 # LMSTUDIO_TIMEOUT_SECONDS=30
 
-# Optional: .qa rate limiting and IRC chunk size
+# Optional: .qa rate limiting and response length
+# Questions allowed per user in the time window below
 # QA_RATE_LIMIT_COUNT=3
+# Time window in minutes for the limit above
 # QA_RATE_LIMIT_WINDOW_MINUTES=30
+# Max characters in one .qa answer line
+# QA_ANSWER_MAX_CHARS=280
+# Number of prior Q&A pairs remembered for follow-ups (0 = off)
+# QA_CONTEXT_MAX_TURNS=4
+# How long (minutes) old Q&A pairs stay in memory
+# QA_CONTEXT_TTL_MINUTES=120
+# Max amount of remembered text sent with each new question
+# QA_CONTEXT_MAX_CHARS=900
+# SQLite file for persisted .qa history (survives restarts)
+# QA_HISTORY_DB_PATH=./data/qa_history.db
 # IRC_MESSAGE_CHUNK_SIZE=380
 ```
 
